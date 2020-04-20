@@ -123,10 +123,11 @@ else:
 out_model = ["const","exp","lin"]
 
 #print len(ts),len(te[te>0]),sum(ts-te)
-
+pad_s_times = np.concatenate( (s_times + np.repeat(0.01, len(s_times)), s_times + np.repeat(-0.01, len(s_times))) )
+pad_s_times = pad_s_times[pad_s_times >= 0]
 if args.DD is True:
 	head_cov_file = ["","DD"]
-	ts_te_vec = np.sort( np.concatenate((ts,te)) )[::-1]
+	ts_te_vec = np.sort( np.concatenate((ts,te,pad_s_times)) )[::-1]
 	Dtraj = getDT(ts_te_vec,ts,te) + np.zeros(len(ts_te_vec))
 	times_of_T_change =  ts_te_vec
 	Temp_values = Dtraj
@@ -138,6 +139,17 @@ else:
 	head_cov_file = next(open(cov_file)).split()
 	times_of_T_change= tempfile[:,0]*args.rescale # array of times of Temp change
 	Temp_values=       tempfile[:,1] # array of Temp values at times_of_T_change
+	trim_temp = times_of_T_change <= max(ts)
+	times_of_T_change = times_of_T_change[trim_temp]
+	Temp_values = Temp_values[trim_temp]
+	times_of_T_change_indexes = np.concatenate((np.zeros(len(times_of_T_change)),np.zeros(len(pad_s_times))+1))
+	times_incl_s_times = np.concatenate((times_of_T_change,pad_s_times))
+	idx = np.argsort(times_incl_s_times)
+	times_incl_s_times_ord = times_incl_s_times[idx]
+	times_of_T_change_indexes_ord = times_of_T_change_indexes[idx]
+	times_incl_s_times_ord = times_incl_s_times[idx]
+	Temp_values = get_VarValue_at_time(times_incl_s_times_ord,Temp_values,times_of_T_change_indexes_ord,times_of_T_change,max(times_incl_s_times))
+	times_of_T_change = times_incl_s_times_ord
 
 # Temp_values= (Temp_values-Temp_values[0]) # so l0 and m0 are rates at the present
 if rescale_factor > 0: Temp_values = Temp_values*rescale_factor
@@ -239,7 +251,13 @@ Temp_at_events=scaled_temp
 if run_single_slice == 1: # values rescaled between 0 and 1 within the slice
 	#print max(Temp_values)-min(Temp_values)
 	temp_values_slice= Temp_at_events[shift_ind==index_slice_of_interest] 
-	temp_values_slice= (temp_values_slice-temp_values_slice[0]) / (max(temp_values_slice)-min(temp_values_slice)) 
+	if rescale_factor > 0:
+		temp_values_slice = temp_values_slice * rescale_factor
+	else:
+		#temp_values_slice= (temp_values_slice-temp_values_slice[0]) / (max(temp_values_slice)-min(temp_values_slice))
+		temp_values_slice = temp_values_slice / (max(temp_values_slice) - min(temp_values_slice))
+		temp_values_slice = temp_values_slice - min(temp_values_slice)
+	Temp_at_events[shift_ind==index_slice_of_interest] = temp_values_slice
 	#print temp_values_slice, max(temp_values_slice)-min(temp_values_slice)
 
 
@@ -470,7 +488,6 @@ for i in range(n_time_bins):
 	V2.append(v_2)
 	V3.append(np.intersect1d(ind_s,v_1))
 	V4.append(np.intersect1d(ind_e,v_1))
-	
 
 
 scal_fac_ind=0
@@ -558,7 +575,11 @@ for iteration in range(mcmc_gen * len(scal_fac_TI)):
 		# shift_ind = [0,0,0,1,1,2,2,2,2,...N], where 0 is index of oldest bin, N of the most recent
 		shift_ind_temp_CURVE =Itemp.astype(int)
 		modified_Temp_at_events[shift_ind_temp_CURVE==0] = modified_Temp_at_events[ (shift_ind_temp_CURVE==1).nonzero()[0][0]  ]
-		
+#	l0 = np.repeat(1.1, n_time_bins)
+#	m0 = np.repeat(0.9, n_time_bins)
+#	Garray[0] = np.repeat(0.2, n_time_bins)
+#	Garray[1] = np.repeat(0.2, n_time_bins)
+	
 	if args_mSpEx[0]==0: 
 		l_at_events=trasfMultipleRateTemp(l0, Garray[0],modified_Temp_at_events,shift_ind)
 	if args_mSpEx[0]==1: 

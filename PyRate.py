@@ -3,9 +3,10 @@
 import argparse, os,sys, platform, time, csv, glob
 import random as rand
 import warnings, importlib
+import importlib.util
 
 version= "PyRate"
-build  = "v3.0 - 20200225"
+build  = "v3.0 - 20200406"
 if platform.system() == "Darwin": sys.stdout.write("\x1b]2;%s\x07" % version)
 
 citation= """Silvestro, D., Antonelli, A., Salamin, N., & Meyer, X. (2019). 
@@ -576,7 +577,7 @@ def plot_ltt(tste_file,plot_type=1,rescale= 1,step_size=1.): # change rescale to
 	# read data
 	print("Processing data...")
 	tbl = np.loadtxt(tste_file,skiprows=1)
-	j_max=(np.shape(tbl)[1]-1)/2
+	j_max=int((np.shape(tbl)[1]-1)/2)
 	j_range=np.arange(j_max)
 	ts = tbl[:,2+2*j_range]*rescale
 	te = tbl[:,3+2*j_range]*rescale
@@ -586,7 +587,7 @@ def plot_ltt(tste_file,plot_type=1,rescale= 1,step_size=1.): # change rescale to
 	wd = "%s" % os.path.dirname(tste_file)
 	out_file_name = os.path.splitext(os.path.basename(tste_file))[0]
 	out_file="%s/%s" % (wd,out_file_name+"_ltt.txt")
-	ltt_file = open(out_file , "w",0)
+	ltt_file = open(out_file , "w")
 	ltt_log=csv.writer(ltt_file, delimiter='\t')
 
 
@@ -1216,15 +1217,18 @@ def update_rates_multiplier(L,M,tot_L,mod_d3):
 	else: U,newL = 0,L
 
 	# UPDATE MU
-	S=np.shape(M)
-	ff=np.random.binomial(1,f_rate,S)
-	d=1.2
-	u = np.random.uniform(0,1,S) #*np.rint(np.random.uniform(0,f,S))
-	l = 2*log(mod_d3)
-	m = exp(l*(u-.5))
-	m[ff==0] = 1.
-	newM = M * m
-	U+=sum(log(m))
+	if use_Birth_model == 0:
+		S=np.shape(M)
+		ff=np.random.binomial(1,f_rate,S)
+		d=1.2
+		u = np.random.uniform(0,1,S) #*np.rint(np.random.uniform(0,f,S))
+		l = 2*log(mod_d3)
+		m = exp(l*(u-.5))
+		m[ff==0] = 1.
+		newM = M * m
+		U+=sum(log(m))
+	else: 
+		newM = M
 	return newL,newM,U
 
 def update_q_multiplier(q,d=1.1,f=0.75):
@@ -1250,7 +1254,7 @@ def update_times(times, max_time,min_time, mod_d4,a,b):
 	y=-1*y
 	return y
 
-def update_ts_te(ts, te, d1):
+def update_ts_te(ts, te, d1, sample_extinction=1):
 	tsn, ten= zeros(len(ts))+ts, zeros(len(te))+te
 	f1=np.random.randint(1,frac1) #int(frac1*len(FA)) #-np.random.random_integers(0,frac1*len(FA)-1))
 	ind=np.random.choice(SP_in_window,f1) # update only values in SP/EX_in_window
@@ -1260,15 +1264,15 @@ def update_ts_te(ts, te, d1):
 	m = FA
 	tsn[tsn<m]=(m[tsn<m]-tsn[tsn<m])+m[tsn<m]
 	tsn[tsn>M] = ts[tsn>M]
-
-	ind=np.random.choice(EX_in_window,f1)
-	ten[ind] = te[ind] + (np.random.uniform(0,1,len(ind))-.5)*d1
-	M = LO
-	ten[ten>M]=M[ten>M]-(ten[ten>M]-M[ten>M])
-	m = 0 #boundMin
-	ten[ten<m]=(m-ten[ten<m])+m
-	ten[ten>M] = te[ten>M]
-	ten[LO==0]=0									 # indices of LO==0 (extant species)
+	if sample_extinction:
+		ind=np.random.choice(EX_in_window,f1)
+		ten[ind] = te[ind] + (np.random.uniform(0,1,len(ind))-.5)*d1
+		M = LO
+		ten[ten>M]=M[ten>M]-(ten[ten>M]-M[ten>M])
+		m = 0 #boundMin
+		ten[ten<m]=(m-ten[ten<m])+m
+		ten[ten>M] = te[ten>M]
+		ten[LO==0]=0									 # indices of LO==0 (extant species)
 	S= tsn-ten
 	if min(S)<=0: print(S)
 	tsn[SP_not_in_window] = max([boundMax, max(tsn[SP_in_window])])
@@ -1945,7 +1949,10 @@ def NHPPgamma(arg):
 ###### BEGIN FUNCTIONS for FBD Range ########
 def init_ts_te_FBDrange(FA,LO):
 	ts,te = init_ts_te(FA,LO)
-	min_dt = min(get_DT_FBDrange(ts,ts,te)[1:])
+	if FBDrange == 3:
+		ts = FA+ np.random.gamma(1,10,len(FA)) #(FA-LO)*0.2
+		te = LO
+	min_dt = np.min(get_DT_FBDrange(ts,ts,te)[1:])
 	print("""\n Using the FBD-range likelihood function \n(Warnock, Heath, and Stadler; Paleobiology, in press)\n""")
 	while min_dt <= 1:
 		ts = ts+0.01*ts
@@ -2133,7 +2140,7 @@ def likelihood_rangeFBD(times, psi, lam, mu, ts, te, k=[], intervalAs=[], int_in
 	if hasFoundPyRateC:
 		term4 = term4_c
 	
-	if FALAmodel==2:
+	if FALAmodel == 2:
 		term5 = np.sum(psi * get_L_FBDrange(times,FA,LO))
 	else: 
 		term5 = 0
@@ -2443,10 +2450,23 @@ def remove_shift_RJ_weighted_mean(rates,times):
 	return rates_prime,times_prime,log_q_prob+Jacobian
 
 def RJMCMC(arg):
-	[L,M, timesL, timesM]=arg
+	[L,M, timesL, timesM,maxFA,minLA]=arg
 	r=np.random.random(3)
-	newL,newtimesL,log_q_probL = L,timesL,0
-	newM,newtimesM,log_q_probM = M,timesM,0
+	newL,log_q_probL = L,0
+	newM,log_q_probM = M,0
+	
+	timesL_init = timesL + 0
+	timesM_init = timesM + 0
+	timesL = timesL + 0
+	timesM = timesM + 0
+	timesL[0] = maxFA
+	timesM[0] = maxFA
+	timesL[len(timesL)-1] = minLA
+	timesM[len(timesM)-1] = minLA	
+	newtimesL = timesL
+	newtimesM = timesM
+	
+	
 
 	if r[0]>sample_shift_mu:
 		# ADD/REMOVE SHIFT LAMBDA
@@ -2474,7 +2494,12 @@ def RJMCMC(arg):
 				newM,newtimesM,log_q_probM = remove_shift_RJ(M,timesM)
 			elif len(M)>2:
 				newM,newtimesM,log_q_probM = remove_DoubleShift_RJ_rand_gamma(M,timesM)
-
+	
+	newtimesL[0] = timesL_init[0]
+	newtimesM[0] = timesM_init[0]
+	newtimesL[len(newtimesL)-1] = timesL_init[len(timesL_init)-1]
+	newtimesM[len(newtimesM)-1] = timesM_init[len(timesM_init)-1]
+	#print(newtimesL, timesL_init, maxFA,minLA)
 	return newL,newtimesL,newM,newtimesM,log_q_probL+log_q_probM
 
 def get_post_rj_HP(xl,xm):
@@ -2638,10 +2663,18 @@ def MCMC(all_arg):
 	[it,n_proc, I,sample_freq, print_freq, temperatures, burnin, marginal_frames, arg]=all_arg
 	if it==0: # initialize chain
 		print("initializing chain...")
+		if fix_SE == 1:
+			maxFA,minLA = np.max(fixed_ts), np.min(fixed_te)
+		else: 
+			maxFA,minLA = np.max(FA), np.min(LO)
+		
+		
 		if fix_SE == 1: tsA, teA = fixed_ts, fixed_te
 		elif FBDrange==0: tsA, teA = init_ts_te(FA,LO)
 		else:
 			tsA, teA = init_ts_te_FBDrange(FA,LO)
+			if FBDrange == 3:
+				teA = LO
 			res_FBD_A = []
 		if restore_chain == 1:
 			tsA_temp, teA_temp = init_ts_te(FA,LO)
@@ -2651,8 +2684,9 @@ def MCMC(all_arg):
 			tsA[tsA<FA]=FA[tsA<FA]+1
 			teA[teA>LO]=LO[teA>LO]-1
 			teA[teA<0]=teA_temp[teA<0]
-		maxTSA = max(tsA)
-		timesLA, timesMA = init_times(maxTSA,time_framesL,time_framesM, min(teA))
+		maxTSA = np.max(tsA)
+		
+		timesLA, timesMA = init_times(maxTSA,time_framesL,time_framesM, np.min(teA))
 		if len(fixed_times_of_shift)>0: timesLA[1:-1],timesMA[1:-1]=fixed_times_of_shift,fixed_times_of_shift
 		if fix_edgeShift > 0:
 			print(edgeShifts,fix_edgeShift)
@@ -2692,6 +2726,7 @@ def MCMC(all_arg):
 				if len(MAt) == len(MA): MA = MAt
 			if use_ADE_model >= 1: MA = np.random.uniform(3,5,len(timesMA)-1)
 			if use_Death_model == 1: LA = np.ones(1)
+			if use_Birth_model == 1: MA = np.zeros(1)+init_M_rate
 			if useDiscreteTraitModel == 1:
 				LA = init_BD(len(lengths_B_events)+1)
 				MA = init_BD(len(lengths_D_events)+1)
@@ -2706,6 +2741,8 @@ def MCMC(all_arg):
 		else:
 			LA = init_BD(len(timesLA))
 			MA = init_BD(len(timesMA))
+			if use_Death_model == 1: LA = np.ones(1)
+			if use_Birth_model == 1: MA = np.zeros(1)+init_M_rate
 			rj_cat_HP= 1
 
 		q_ratesA,cov_parA = init_q_rates() # use 1 for symmetric PERT
@@ -2730,7 +2767,7 @@ def MCMC(all_arg):
 
 		if argsG == 0 and TPP_model == 0: q_ratesA[0]=1
 		if argsG == 1 and TPP_model == 1 and restore_chain == 1: alpha_pp_gammaA=restore_init_values[6]
-		SA=sum(tsA-teA)
+		SA=np.sum(tsA-teA)
 		W_shapeA=1.
 
 		if analyze_tree >=1:
@@ -2745,7 +2782,7 @@ def MCMC(all_arg):
 
 	else: # restore values
 		[itt, n_proc_,PostA, likA, priorA,tsA,teA,timesLA,timesMA,LA,MA,q_ratesA, cov_parA, lik_fossilA,likBDtempA]=arg
-		SA=sum(tsA-teA)
+		SA=np.sum(tsA-teA)
 
 	# start threads
 	if num_processes>0: pool_lik = multiprocessing.Pool(num_processes) # likelihood
@@ -2801,11 +2838,11 @@ def MCMC(all_arg):
 
 		if it>0 and (it-burnin) % (I_effective/len(temperatures)) == 0 and it>burnin or it==I-1: rr=1.5 # no updates when changing temp
 
-		q_rates=zeros(len(q_ratesA))
+		q_rates=np.zeros(len(q_ratesA))
 		alpha_pp_gamma=alpha_pp_gammaA
-		cov_par=zeros(3)
-		L,M=zeros(len(LA)),zeros(len(MA))
-		tot_L=sum(tsA-teA)
+		cov_par=np.zeros(3)
+		L,M = np.zeros(len(LA)),np.zeros(len(MA))
+		tot_L = np.sum(tsA-teA)
 		hasting=0
 
 		# autotuning
@@ -2818,9 +2855,12 @@ def MCMC(all_arg):
 
 		if rr<f_update_se: # ts/te
 			move_type = 1
-			ts,te=update_ts_te(tsA,teA,mod_d1)
+			if FBDrange == 3:
+				ts,te=update_ts_te(tsA,teA,mod_d1,sample_extinction=0)
+			else:
+				ts,te=update_ts_te(tsA,teA,mod_d1)
 			if use_gibbs_se_sampling or it < fast_burnin:
-				if sum(timesL[1:-1])==sum(times_q_shift):
+				if sum(timesL[1:-1])==np.sum(times_q_shift):
 					ts,te = gibbs_update_ts_te(q_ratesA+LA,q_ratesA+MA,np.sort(np.array([np.inf,0]+times_q_shift))[::-1])
 				else:
 					times_q_temp = np.sort(np.array([np.inf,0]+times_q_shift))[::-1]
@@ -2836,7 +2876,8 @@ def MCMC(all_arg):
 						q_rates_temp_M = q_rates_temp + MA[np.digitize(q_temp_time,timesMA[1:])]
 					ts,te = gibbs_update_ts_te(q_rates_temp_L,q_rates_temp_M,times_q_temp)
 
-			tot_L=sum(ts-te)
+			tot_L=np.sum(ts-te)
+		
 		elif rr<f_update_q: # q/alpha
 			move_type = 2
 			q_rates=np.zeros(len(q_ratesA))+q_ratesA
@@ -2865,10 +2906,8 @@ def MCMC(all_arg):
 						timesM=update_times(timesMA,max(ts),edgeShifts[0],mod_d4,1,len(timesM)-2)
 
 				else:
-					maxTS = max(ts)
-					minTE = min(te)
-					timesL=update_times(timesLA, maxTS,minTE,mod_d4,1,len(timesL))
-					timesM=update_times(timesMA, maxTS,minTE,mod_d4,1,len(timesM))
+					timesL=update_times(timesLA, maxFA,minLA,mod_d4,1,len(timesL))
+					timesM=update_times(timesMA, maxFA,minLA,mod_d4,1,len(timesM))
 			else:
 				move_type = 4
 				if TDI<2: #
@@ -2900,7 +2939,7 @@ def MCMC(all_arg):
 		L[(L==0).nonzero()]=LA[(L==0).nonzero()]
 		M[(M==0).nonzero()]=MA[(M==0).nonzero()]
 		cov_par[(cov_par==0).nonzero()]=cov_parA[(cov_par==0).nonzero()]
-		max_ts = max(ts)
+		max_ts = np.max(ts)
 		timesL[0]=max_ts
 		timesM[0]=max_ts
 		if fix_SE == 0:
@@ -2950,7 +2989,7 @@ def MCMC(all_arg):
 								i=ind1[j] # which species' lik
 								lik_fossil2[i] = HPP_vec_lik([te[i],ts[i],q_time_frames,q_rates,i,alpha_pp_gamma])
 
-							absDivergence = abs(sum(lik_fossil2) - sum(lik_fossil))
+							absDivergence = abs(np.sum(lik_fossil2) - np.sum(lik_fossil))
 							if absDivergence > sanityCheckThreshold:
 								print("[WARNING] HPP_vec_lik diverged for more than ", sanityCheckThreshold, " (", absDivergence, ")")
 
@@ -2968,7 +3007,7 @@ def MCMC(all_arg):
 								i=ind1[j] # which species' lik
 								lik_fossil2[i] = HOMPP_lik(args[j])
 
-							absDivergence = abs(sum(lik_fossil2) - sum(lik_fossil))
+							absDivergence = abs(np.sum(lik_fossil2) - np.sum(lik_fossil))
 							if absDivergence > sanityCheckThreshold:
 								print("[WARNING] PyRateC_HOMPP_lik diverged for more than ", sanityCheckThreshold, " (", absDivergence, ")")
 
@@ -2986,7 +3025,7 @@ def MCMC(all_arg):
 								if argsG == 1: lik_fossil2[i] = NHPPgamma(args[j])
 								else: lik_fossil2[i] = NHPP_lik(args[j])
 
-							absDivergence = abs(sum(lik_fossil2) - sum(lik_fossil))
+							absDivergence = abs(np.sum(lik_fossil2) - np.sum(lik_fossil))
 							if absDivergence > sanityCheckThreshold:
 								print("[WARNING] PyRateC_NHPP_lik diverged for more than ", sanityCheckThreshold, " (", absDivergence, ")")
 
@@ -3017,7 +3056,7 @@ def MCMC(all_arg):
 				stop_update=inf
 			elif np.random.random()< 0.3 and TDI==4:
 				stop_update=0
-				L,timesL,M,timesM,hasting2 = RJMCMC([LA,MA, timesLA, timesMA])
+				L,timesL,M,timesM,hasting2 = RJMCMC([LA,MA, timesLA, timesMA, maxFA,minLA])
 				hasting += hasting2
 				move_type=0
 
@@ -3065,12 +3104,12 @@ def MCMC(all_arg):
 		# pert_prior defines gamma prior on q_rates[1] - fossilization rate
 		if TPP_model == 1:
 			if pert_prior[1]>0:
-				prior = sum(prior_gamma(q_rates,pert_prior[0],pert_prior[1]))+ prior_uniform(alpha_pp_gamma,0,20)
+				prior = np.sum(prior_gamma(q_rates,pert_prior[0],pert_prior[1]))+ prior_uniform(alpha_pp_gamma,0,20)
 			else: # use hyperprior on Gamma rate on q
 				hpGammaQ_shape = 1.01 # hyperprior is essentially flat
 				hpGammaQ_rate =  0.1
-				post_rate_prm_Gq = np.random.gamma( shape=hpGammaQ_shape+pert_prior[0]*len(q_rates), scale=1./(hpGammaQ_rate+sum(q_rates)) )
-				prior = sum(prior_gamma(q_rates,pert_prior[0],post_rate_prm_Gq)) + prior_uniform(alpha_pp_gamma,0,20)
+				post_rate_prm_Gq = np.random.gamma( shape=hpGammaQ_shape+pert_prior[0]*len(q_rates), scale=1./(hpGammaQ_rate+np.sum(q_rates)) )
+				prior = np.sum(prior_gamma(q_rates,pert_prior[0],post_rate_prm_Gq)) + prior_uniform(alpha_pp_gamma,0,20)
 		else: prior = prior_gamma(q_rates[1],pert_prior[0],pert_prior[1]) + prior_uniform(q_rates[0],0,20)
 		if est_hyperP == 1: prior += ( prior_uniform(hyperP[0],0,20)+prior_uniform(hyperP[1],0,20) ) # hyperprior on BD rates
 
@@ -3138,7 +3177,7 @@ def MCMC(all_arg):
 								likBDtemp2[i]=BPD_partial_lik(args[i])
 								i+=1
 
-							absDivergence = abs(sum(likBDtemp) - sum(likBDtemp2))
+							absDivergence = abs(np.sum(likBDtemp) - np.sum(likBDtemp2))
 							if absDivergence > sanityCheckThreshold:
 								print("[WARNING] BPD_partial_lik diverged for more than ", sanityCheckThreshold, " (", absDivergence, ")")
 
@@ -3163,7 +3202,7 @@ def MCMC(all_arg):
 
 				elif TDI==4 and FBDrange==0: # run RJMCMC
 					stop_update = 0
-					L,timesL,M,timesM,hasting = RJMCMC([LA,MA, timesLA, timesMA])
+					L,timesL,M,timesM,hasting = RJMCMC([LA,MA, timesLA, timesMA,maxFA,minLA])
 					#print  L,timesL,M,timesM #,hasting
 					args=list()
 					for temp_l in range(len(timesL)-1):
@@ -3186,7 +3225,7 @@ def MCMC(all_arg):
 								likBDtemp2[i]=BPD_partial_lik(args[i])
 								i+=1
 
-							absDivergence = abs(sum(likBDtemp) - sum(likBDtemp2))
+							absDivergence = abs(np.sum(likBDtemp) - np.sum(likBDtemp2))
 							if absDivergence > sanityCheckThreshold:
 								print("[WARNING] BPD_partial_lik diverged for more than ", sanityCheckThreshold, " (", absDivergence, ")")
 
@@ -3237,8 +3276,8 @@ def MCMC(all_arg):
 		maxTs= max(ts)
 		minTe= min(te)
 		if TDI < 3:
-			prior += sum(prior_times_frames(timesL, maxTs, minTe, lam_s))
-			prior += sum(prior_times_frames(timesM, maxTs, minTe, lam_s))
+			prior += np.sum(prior_times_frames(timesL, maxTs, minTe, lam_s))
+			prior += np.sum(prior_times_frames(timesM, maxTs, minTe, lam_s))
 		if TDI ==4:
 			#prior_old = -log(max(ts)-max(te))*len(L-1)  #sum(prior_times_frames(timesL, max(ts),min(te), 1))
 			#prior_old += -log(max(ts)-max(te))*len(M-1)  #sum(prior_times_frames(timesM, max(ts),min(te), 1))
@@ -3296,7 +3335,7 @@ def MCMC(all_arg):
 			else:
 				tree_lik = treeBDlikelihoodSkyLine(tree_node_ages,phylo_times_of_shift,l_tree,m_tree,tree_sampling_frac)
 				hasting = hasting+h1+h2
-				prior += sum(prior_gamma(l_tree,1.1,1)) + sum(prior_gamma(m_tree,1.1,1))
+				prior += np.sum(prior_gamma(l_tree,1.1,1)) + np.sum(prior_gamma(m_tree,1.1,1))
 		else:
 			tree_lik = 0
 
@@ -3305,7 +3344,7 @@ def MCMC(all_arg):
 			lik_alter=lik
 		else:
 			tempMC3=1
-			lik_alter=(sum(lik_fossil)+ PoiD_const) + (sum(likBDtemp)+ PoiD_const)*temperature
+			lik_alter=(np.sum(lik_fossil)+ PoiD_const) + (np.sum(likBDtemp)+ PoiD_const)*temperature
 		Post=lik_alter+prior+tree_lik
 		accept_it = 0
 		if it==0:
@@ -3335,7 +3374,7 @@ def MCMC(all_arg):
 				LA,MA=L,M
 				hyperPA=hyperP
 				tsA,teA=ts,te
-				SA=sum(tsA-teA)
+				SA=np.sum(tsA-teA)
 				q_ratesA=q_rates
 				alpha_pp_gammaA=alpha_pp_gamma
 				lik_fossilA=lik_fossil
@@ -3653,6 +3692,7 @@ p.add_argument('-mC',	  help='Model - constrain time frames (l,m)', action='stor
 p.add_argument('-mCov',	type=int, help='COVAR model: 1) speciation, 2) extinction, 3) speciation & extinction, 4) preservation, 5) speciation & extinction & preservation', default=0, metavar=0)
 p.add_argument("-mG",	  help='Model - Gamma heterogeneity of preservation rate', action='store_true', default=False)
 p.add_argument('-mPoiD',   help='Poisson-death diversification model', action='store_true', default=False)
+p.add_argument('-mBirth',  type=float, help='Birth model with fix extinction rate', default= -1, metavar= -1)
 p.add_argument('-mDeath',  help='Pure-death model', action='store_true', default=False)
 p.add_argument("-mBDI",	type=int, help='BDI sub-model - 0) birth-death, 1) immigration-death', default=-1, metavar=-1)
 p.add_argument("-ncat",	type=int, help='Model - Number of categories for Gamma heterogeneity', default=4, metavar=4)
@@ -4207,7 +4247,7 @@ boundMin = min(args.bound) # if not specified it is set to 0
 if model_cov>=1 or useDiscreteTraitModel == 1 or useBounded_BD == 1:
 	if 2>1: #try:
 		if args.trait_file != "": # Use trait file
-			traitfile=file(args.trait_file, 'U')
+			traitfile=open(args.trait_file, 'r')
 
 			L=traitfile.readlines()
 			head= L[0].split()
@@ -4374,6 +4414,12 @@ else:
 if args.mDeath == 1: use_Death_model = 1
 else: use_Death_model= 0
 
+if args.mBirth >= 0:
+	use_Birth_model = 1
+	init_M_rate = args.mBirth
+else:
+	use_Birth_model = 0
+
 
 # USE BDI subMODELS
 model_BDI=args.mBDI
@@ -4451,28 +4497,24 @@ if use_ADE_model >= 1:
 
 qFilter=args.qFilter # if set to zero all times of shifts (and preservation rates) are kept, even if they don't have occurrences
 if args.qShift != "":
-	if 2>1: #try:
-		try: times_q_shift=np.sort(np.loadtxt(args.qShift))[::-1]*args.rescale + args.translate
-		except: times_q_shift=np.array([np.loadtxt(args.qShift)])*args.rescale + args.translate
-		# filter qShift times based on observed time frame
-		if qFilter == 1:
-			times_q_shift=times_q_shift[times_q_shift<max(FA)]
-			times_q_shift=list(times_q_shift[times_q_shift>min(LO)])
-		else: # q outside observed range (sampled from the prior)
-			times_q_shift = list(times_q_shift)
-		time_framesQ=len(times_q_shift)+1
-		occs_sp_bin =list()
-		temp_times_q_shift = np.array(list(times_q_shift)+[max(FA)+1]+[0])
-		for i in range(len(fossil)):
-			occs_temp = fossil[i]
-			h = np.histogram(occs_temp[occs_temp>0],bins=sort( temp_times_q_shift ))[0][::-1]
-			occs_sp_bin.append(h)
-		argsHPP = 1
-		TPP_model = 1
-		print(times_q_shift, max(FA), min(LO))
-	#except:
-	#	msg = "\nError in the input file %s.\n" % (args.qShift)
-	#	sys.exit(msg)
+	try: times_q_shift=np.sort(np.loadtxt(args.qShift))[::-1]*args.rescale + args.translate
+	except: times_q_shift=np.array([np.loadtxt(args.qShift)])*args.rescale + args.translate
+	# filter qShift times based on observed time frame
+	if qFilter == 1:
+		times_q_shift=times_q_shift[times_q_shift<max(FA)]
+		times_q_shift=list(times_q_shift[times_q_shift>min(LO)])
+	else: # q outside observed range (sampled from the prior)
+		times_q_shift = list(times_q_shift)
+	time_framesQ=len(times_q_shift)+1
+	occs_sp_bin =list()
+	temp_times_q_shift = np.array(list(times_q_shift)+[max(FA)+1]+[0])
+	for i in range(len(fossil)):
+		occs_temp = fossil[i]
+		h = np.histogram(occs_temp[occs_temp>0],bins=sort( temp_times_q_shift ))[0][::-1]
+		occs_sp_bin.append(h)
+	argsHPP = 1
+	TPP_model = 1
+	print(times_q_shift, max(FA), min(LO))
 else: TPP_model = 0
 
 
